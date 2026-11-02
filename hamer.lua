@@ -65,7 +65,7 @@ local S = {
     DongHeadColor = Color3.fromRGB(200, 60, 60), CosmeticGlow = true,
     Wings = false, Halo = false, ChinaHat = false, Kagune = false, Companion = false, NoAnims = false,
     Korblox = false, GhostLegs = false,
-    AvatarScale = 1, ConfigName = "default", DroneActive = false, Mobile = false,
+    AvatarScale = 1, ConfigName = "default", DroneActive = false, Mobile = false, Optimize = 2,
     Transparent = false, Fox = false, FoxSize = 1,
     CoinFarm = false, FarmNoClip = false, FarmUnderMap = false, FarmSpeed = 80,
     SilentAim = false, SilentAimFOV = 180, SilentAimMaxDist = 600, SilentAimPredict = 120, SilentAimWallbang = false,
@@ -84,6 +84,24 @@ local Conns = {}
 local function conn(c)
     table.insert(Conns, c)
     return c
+end
+local FrameTick = 0
+conn(RunService.RenderStepped:Connect(function()
+    FrameTick = FrameTick + 1
+    if FrameTick > 100000 then FrameTick = 0 end
+end))
+local function optSkip()
+    local step = S.Optimize >= 3 and 4 or (S.Optimize == 2 and 3 or 2)
+    return FrameTick % step ~= 0
+end
+local function applyOptimization()
+    if S.Optimize >= 3 then
+        S.MotionBlur = false
+        local mb = Lighting:FindFirstChild("HamerMotionBlur")
+        if mb then mb.Size = 0 end
+    end
+    local label = S.Optimize >= 3 and "max" or (S.Optimize == 2 and "medium" or "weak")
+    toast("optimization: " .. label)
 end
 local function clamp(v, a, b)
     if v < a then return a elseif v > b then return b end
@@ -232,7 +250,8 @@ local SUBTITLES = {
     SilentAim = "Route shots onto target", SilentAimFOV = "Target search radius",
     SilentAimMaxDist = "Maximum lock distance", SilentAimPredict = "Velocity prediction",
     SilentAimWallbang = "Shoot through walls", KillAll = "Knife every player",
-    AutoLoadConfig = "Load config on inject", Aura = "Orbiting energy rings",
+    AutoLoadConfig = "Load config on inject", Optimize = "1 weak, 2 medium, 3 max",
+    Aura = "Orbiting energy rings",
     Crown = "Floating neon crown", Horns = "Demon horns", CatEars = "Neon cat ears",
     Jetpack = "Neon jetpack", Tail = "Animated neon tail", TopHat = "Classic top hat",
     Visor = "Glowing visor", Scythe = "Neon scythe on your back"
@@ -1872,7 +1891,8 @@ conn(Players.PlayerRemoving:Connect(function(plr)
     visCache[plr] = nil
 end))
 conn(RunService.RenderStepped:Connect(function()
-    if not Unloaded then updateESP() end
+    if Unloaded or optSkip() then return end
+    updateESP()
 end))
 
 UI.lightBase = {
@@ -2093,7 +2113,8 @@ local function updateCoinFarm(dt, char, hum, root)
     end
     hum.PlatformStand = true
     farmScanAcc = farmScanAcc + dt
-    if farmScanAcc >= 0.35 or not (farmTarget and farmTarget.Parent) then
+    local scanRate = S.Optimize >= 3 and 0.8 or (S.Optimize == 2 and 0.5 or 0.3)
+    if farmScanAcc >= scanRate or not (farmTarget and farmTarget.Parent) then
         farmScanAcc = 0
         farmTarget = findCoin(char, root)
     end
@@ -2277,7 +2298,7 @@ conn(RunService.RenderStepped:Connect(function()
     end
 end))
 
-local Drone = {model = nil, conn = nil, active = false, t = 0}
+local Drone = {model = nil, conn = nil, active = false, t = 0, prevType = nil, prevSubject = nil}
 
 local function mkDronePart(model, name, shape, size, cf, material, color)
     local p = Instance.new("Part")
@@ -2308,10 +2329,55 @@ local function createDroneModel()
     return model, prop
 end
 
+local function droneExplode(pos)
+    local boom = Instance.new("Explosion")
+    boom.Position = pos
+    boom.BlastRadius = 9
+    boom.BlastPressure = 0
+    boom.DestroyJointRadiusPercent = 0
+    boom.Parent = Workspace
+    local ball = Instance.new("Part")
+    ball.Shape = Enum.PartType.Ball
+    ball.Material = Enum.Material.Neon
+    ball.Color = Color3.fromRGB(255, 150, 45)
+    ball.Size = Vector3.new(2, 2, 2)
+    ball.Transparency = 0.15
+    ball.Anchored = true
+    ball.CanCollide = false
+    ball.CanQuery = false
+    ball.CanTouch = false
+    ball.CastShadow = false
+    ball.Position = pos
+    ball.Parent = Workspace
+    local light = Instance.new("PointLight")
+    light.Color = Color3.fromRGB(255, 170, 70)
+    light.Range = 18
+    light.Brightness = 8
+    light.Parent = ball
+    TweenService:Create(ball, TweenInfo.new(0.5, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+        Size = Vector3.new(14, 14, 14),
+        Transparency = 1
+    }):Play()
+    task.delay(0.55, function()
+        if ball.Parent then ball:Destroy() end
+    end)
+end
+
 local function stopDrone()
     Drone.active = false
     S.DroneActive = false
     if Drone.conn then Drone.conn:Disconnect(); Drone.conn = nil end
+    if Drone.prevType ~= nil then
+        if Camera then
+            Camera.CameraType = Drone.prevType
+            local subject = Drone.prevSubject
+            if not (subject and subject.Parent) then
+                subject = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+            end
+            Camera.CameraSubject = subject
+        end
+        Drone.prevType, Drone.prevSubject = nil, nil
+    end
     if Drone.model and Drone.model.Parent then Drone.model:Destroy() end
     Drone.model = nil
 end
@@ -2328,6 +2394,11 @@ local function startDrone()
     Drone.active = true
     S.DroneActive = true
     Drone.t = 0
+    if Camera then
+        Drone.prevType = Camera.CameraType
+        Drone.prevSubject = Camera.CameraSubject
+        Camera.CameraType = Enum.CameraType.Scriptable
+    end
     local target, bestDist = nil, math.huge
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
@@ -2358,6 +2429,9 @@ local function startDrone()
         if dir.Magnitude > 0.1 then
             model:PivotTo(CFrame.lookAt(fus.Position + dir.Unit * 45 * dt, targetPos))
         end
+        if Camera then
+            Camera.CFrame = fus.CFrame * CFrame.new(0, 0.35, -2.0)
+        end
         if prop and prop.Parent then
             prop.CFrame = fus.CFrame * CFrame.new(0, 0, 1.9) * CFrame.Angles(0, 0, Drone.t * 35)
         end
@@ -2366,10 +2440,14 @@ local function startDrone()
             if tr and (tr.Position - fus.Position).Magnitude < 3 then
                 local hum = target.Character:FindFirstChildOfClass("Humanoid")
                 if hum then hum.Health = 0 end
+                droneExplode(fus.Position)
                 stopDrone()
             end
         end
-        if Drone.t > 30 then stopDrone() end
+        if Drone.t > 30 then
+            droneExplode(fus.Position)
+            stopDrone()
+        end
     end)
 end
 
@@ -3562,6 +3640,11 @@ local function reapplyAll()
     applyAccent()
     applyUITransparency()
     uiScale.Scale = computeScale()
+    if S.Optimize >= 3 then
+        S.MotionBlur = false
+        local mb = Lighting:FindFirstChild("HamerMotionBlur")
+        if mb then mb.Size = 0 end
+    end
     task.defer(function()
         if not Unloaded and S.MenuOpen then selectTab(currentTab) end
     end)
@@ -3767,6 +3850,7 @@ end
 builders.configs = function()
     textRow("Config name", "ConfigName", "default")
     toggleRow("Auto load on start", "AutoLoadConfig")
+    stepRow("Optimization", "Optimize", 1, 3, 1, "", applyOptimization)
     actionRow("Save config", "Write current settings to file.", Cfg.save)
     actionRow("Load config", "Apply saved settings.", Cfg.load)
     actionRow("Delete config", "Remove saved config.", Cfg.delete)
