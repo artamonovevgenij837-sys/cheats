@@ -10,7 +10,15 @@ local TeleportService = game:GetService("TeleportService")
 local Stats = game:GetService("Stats")
 local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
+while not LocalPlayer do
+    task.wait(0.1)
+    LocalPlayer = Players.LocalPlayer
+end
 local Camera = Workspace.CurrentCamera
+while not Camera do
+    task.wait(0.1)
+    Camera = Workspace.CurrentCamera
+end
 
 local FONT_BLACK = Enum.Font.GothamBlack
 local FONT_BOLD = Enum.Font.GothamBold
@@ -448,6 +456,18 @@ local gridLayout = Instance.new("UIListLayout")
 gridLayout.Padding = UDim.new(0, 10)
 gridLayout.SortOrder = Enum.SortOrder.LayoutOrder
 gridLayout.Parent = grid
+
+local builders = {}
+local tabButtons = {}
+local currentTab = "combat"
+local tabs = {
+    {id = "combat", label = "Combat", icon = "⚔️"},
+    {id = "visual", label = "Visuals", icon = "👁️"},
+    {id = "themes", label = "Themes", icon = "🎨"},
+    {id = "places", label = "Places", icon = "🌐"},
+    {id = "configs", label = "Configs", icon = "💾"},
+    {id = "cosmetics", label = "Cosmetics", icon = "✨"}
+}
 
 local ActiveCards = {}
 local cardOrder = 0
